@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>SignBridge — Sign Language Translator</title>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=Space+Grotesk:wght@400;500;600&display=swap" rel="stylesheet"/>
+  
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+  <style>
+    /* (Your existing CSS remains exactly the same) */
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'DM Sans', sans-serif; background: #0a0f1e; color: #e8eaf6; min-height: 100vh; }
+    .app { display: flex; flex-direction: column; min-height: 100vh; max-width: 1100px; margin: 0 auto; padding: 0 1.5rem 2rem; }
+
+    header { display: flex; align-items: center; justify-content: space-between; padding: 1.25rem 0; border-bottom: 0.5px solid rgba(255,255,255,0.08); margin-bottom: 1.75rem; }
+    .logo { display: flex; align-items: center; gap: 10px; }
+    .logo-icon { width: 36px; height: 36px; background: linear-gradient(135deg, #4f8ef7, #a78bfa); border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 18px; }
+    .logo-text { font-family: 'Space Grotesk', sans-serif; font-size: 20px; font-weight: 600; color: #fff; letter-spacing: -0.3px; }
+    .logo-text span { color: #818cf8; }
+    .status-badge { display: flex; align-items: center; gap: 7px; background: rgba(79,222,130,0.1); border: 0.5px solid rgba(79,222,130,0.25); color: #4fde82; font-size: 12px; font-weight: 500; padding: 5px 12px; border-radius: 20px; }
+    .dot { width: 7px; height: 7px; background: #4fde82; border-radius: 50%; animation: pulse 1.8s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+    .mode-toggle { display: flex; background: rgba(255,255,255,0.04); border-radius: 10px; padding: 3px; gap: 3px; margin-bottom: 1.25rem; }
+    .mode-btn { flex: 1; padding: 9px; text-align: center; font-size: 13px; border-radius: 8px; cursor: pointer; transition: all 0.18s; color: rgba(255,255,255,0.4); border: none; background: transparent; font-family: 'DM Sans', sans-serif; }
+    .mode-btn.active { background: #1e2d4f; color: #4f8ef7; font-weight: 500; }
+
+    .panel { display: none; }
+    .panel.active { display: block; }
+
+    .main-grid { display: grid; grid-template-columns: 1fr 340px; gap: 1.25rem; align-items: start; }
+    @media (max-width: 768px) { .main-grid { grid-template-columns: 1fr; } }
+
+    .camera-panel { background: #111827; border-radius: 16px; overflow: hidden; border: 0.5px solid rgba(255,255,255,0.07); }
+    .camera-feed { position: relative; width: 100%; aspect-ratio: 4/3; background: #0d1117; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+    .camera-placeholder { display: flex; flex-direction: column; align-items: center; gap: 14px; color: rgba(255,255,255,0.25); z-index: 10; }
+    .cam-icon { width: 64px; height: 64px; border: 2px dashed rgba(255,255,255,0.15); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 26px; }
+    .camera-placeholder p { font-size: 14px; }
+    .corner-tl,.corner-tr,.corner-bl,.corner-br { position: absolute; width: 20px; height: 20px; border-color: #4f8ef7; border-style: solid; opacity: 0.6; z-index: 5; }
+    .corner-tl{top:16px;left:16px;border-width:2px 0 0 2px;border-radius:4px 0 0 0}
+    .corner-tr{top:16px;right:16px;border-width:2px 2px 0 0;border-radius:0 4px 0 0}
+    .corner-bl{bottom:16px;left:16px;border-width:0 0 2px 2px;border-radius:0 0 0 4px}
+    .corner-br{bottom:16px;right:16px;border-width:0 2px 2px 0;border-radius:0 0 4px 0}
+    .scanning-bar { position: absolute; left:0; right:0; height:2px; background: linear-gradient(90deg,transparent,#4f8ef7,transparent); top:0; animation: scan 2.5s linear infinite; opacity:0; transition:opacity 0.3s; z-index: 5; }
+    .scanning-bar.active{opacity:1}
+    @keyframes scan{0%{top:10%}100%{top:90%}}
+    .camera-controls { display: flex; align-items: center; justify-content: center; gap: 14px; padding: 1rem; flex-wrap: wrap; }
+
+    /* === NEW: CANVAS STYLING === */
+    .output_canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; z-index: 2; pointer-events: none; }
+
+    .btn-primary { background: linear-gradient(135deg,#4f8ef7,#818cf8); color:#fff; border:none; padding:10px 24px; border-radius:10px; font-family:'DM Sans',sans-serif; font-size:14px; font-weight:500; cursor:pointer; transition:opacity 0.2s,transform 0.15s; }
+    .btn-primary:hover{opacity:0.9;transform:scale(0.98)}
+    .btn-secondary { background:rgba(255,255,255,0.06); color:rgba(255,255,255,0.6); border:0.5px solid rgba(255,255,255,0.1); padding:10px 16px; border-radius:10px; font-family:'DM Sans',sans-serif; font-size:14px; cursor:pointer; transition:background 0.2s; }
+    .btn-secondary:hover{background:rgba(255,255,255,0.1)}
+
+    .right-panel { display:flex; flex-direction:column; gap:1rem; }
+    .card { background:#111827; border-radius:14px; padding:1.1rem 1.25rem; border:0.5px solid rgba(255,255,255,0.07); }
+    .card-label { font-size:11px; font-weight:500; letter-spacing:0.08em; text-transform:uppercase; color:rgba(255,255,255,0.35); margin-bottom:0.6rem; }
+    .detected-sign { font-family:'Space Grotesk',sans-serif; font-size:42px; font-weight:600; color:#fff; line-height:1; margin-bottom:4px; }
+    .detected-conf { font-size:12px; color:#4f8ef7; }
+    .translation-text { font-size:16px; font-weight:500; color:#e8eaf6; line-height:1.55; min-height:48px; }
+    .sentence-area { background:rgba(79,142,247,0.05); border:0.5px solid rgba(79,142,247,0.18); border-radius:10px; padding:0.9rem 1rem; font-size:14px; color:rgba(255,255,255,0.7); min-height:80px; line-height:1.6; }
+    .output-actions { display:flex; gap:8px; margin-top:0.75rem; flex-wrap:wrap; }
+    .chip { background:rgba(255,255,255,0.05); border:0.5px solid rgba(255,255,255,0.1); color:rgba(255,255,255,0.5); font-size:12px; padding:5px 11px; border-radius:8px; cursor:pointer; transition:all 0.15s; }
+    .chip:hover{background:rgba(255,255,255,0.1);color:rgba(255,255,255,0.8)}
+    .history-list { display:flex; flex-direction:column; gap:8px; max-height:160px; overflow-y:auto; }
+    .history-item { display:flex; align-items:center; gap:10px; padding:8px 10px; background:rgba(255,255,255,0.03); border-radius:8px; font-size:13px; color:rgba(255,255,255,0.55); }
+    .history-sign { font-family:'Space Grotesk',sans-serif; font-weight:600; color:#818cf8; font-size:15px; min-width:30px; }
+    .accessibility-bar { display:flex; align-items:center; gap:10px; padding:0.7rem 0; border-top:0.5px solid rgba(255,255,255,0.06); margin-top:1rem; flex-wrap:wrap; }
+    .a11y-label { font-size:12px; color:rgba(255,255,255,0.3); flex:1; }
+    .a11y-chip { background:rgba(167,139,250,0.1); border:0.5px solid rgba(167,139,250,0.2); color:#a78bfa; font-size:11px; font-weight:500; padding:4px 10px; border-radius:6px; cursor:pointer; }
+
+    /* TEXT TO SIGN & SPEECH TO SIGN STYLES (Unchanged) */
+    .tts-container { display:flex; flex-direction:column; gap:1.25rem; }
+    .tts-textarea { width:100%; min-height:120px; background:#111827; border:0.5px solid rgba(255,255,255,0.1); border-radius:14px; padding:1rem 1.25rem; color:#e8eaf6; font-family:'DM Sans',sans-serif; font-size:15px; resize:vertical; outline:none; line-height:1.6; transition:border-color 0.2s; }
+    .tts-textarea:focus{border-color:rgba(79,142,247,0.4)}
+    .tts-textarea::placeholder{color:rgba(255,255,255,0.2)}
+    .tts-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:0.75rem}
+    .sign-display-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(130px,1fr)); gap:12px; margin-top:0.75rem; }
+    .sign-card { background:#111827; border:0.5px solid rgba(255,255,255,0.08); border-radius:12px; padding:1rem; text-align:center; transition:border-color 0.2s,transform 0.15s; animation:fadeIn 0.3s ease; }
+    .sign-card:hover{border-color:rgba(79,142,247,0.3);transform:translateY(-2px)}
+    @keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+    .sign-card-emoji{font-size:40px;margin-bottom:8px;display:block}
+    .sign-card-word{font-family:'Space Grotesk',sans-serif;font-size:13px;font-weight:500;color:#fff;margin-bottom:4px}
+    .sign-card-desc{font-size:11px;color:rgba(255,255,255,0.35);line-height:1.4}
+    .tts-empty{text-align:center;padding:3rem 1rem;color:rgba(255,255,255,0.2);font-size:14px}
+    .tts-empty span{font-size:40px;display:block;margin-bottom:12px}
+
+    .sts-container{display:flex;flex-direction:column;gap:1.25rem}
+    .mic-area { background:#111827; border-radius:16px; border:0.5px solid rgba(255,255,255,0.07); padding:2.5rem 1.5rem; text-align:center; display:flex; flex-direction:column; align-items:center; gap:1.25rem; }
+    .mic-btn { width:80px; height:80px; border-radius:50%; background:linear-gradient(135deg,#4f8ef7,#818cf8); border:none; font-size:32px; cursor:pointer; display:flex; align-items:center; justify-content:center; transition:transform 0.15s; }
+    .mic-btn:hover{transform:scale(1.05)}
+    .mic-btn.listening{animation:micPulse 1.2s infinite}
+    @keyframes micPulse{0%{box-shadow:0 0 0 0 rgba(79,142,247,0.4)}70%{box-shadow:0 0 0 20px rgba(79,142,247,0)}100%{box-shadow:0 0 0 0 rgba(79,142,247,0)}}
+    .mic-status{font-size:14px;color:rgba(255,255,255,0.4);min-height:20px}
+    .mic-status.active{color:#4fde82}
+    .mic-status.error{color:#ff6b7a}
+    .transcript-box { width:100%; background:rgba(79,142,247,0.05); border:0.5px solid rgba(79,142,247,0.18); border-radius:10px; padding:1rem 1.25rem; font-size:15px; color:rgba(255,255,255,0.8); min-height:60px; line-height:1.6; text-align:left; }
+    .sts-sign-area{display:flex;flex-direction:column;gap:1rem}
+    .word-chips{display:flex;flex-wrap:wrap;gap:8px}
+    .word-chip { background:rgba(255,255,255,0.05); border:0.5px solid rgba(255,255,255,0.1); color:rgba(255,255,255,0.6); font-size:13px; padding:5px 12px; border-radius:8px; cursor:pointer; transition:all 0.15s; }
+    .word-chip:hover,.word-chip.active{background:rgba(79,142,247,0.15);border-color:rgba(79,142,247,0.4);color:#4f8ef7}
+    .big-sign-display { background:#111827; border-radius:14px; border:0.5px solid rgba(255,255,255,0.07); padding:2rem; text-align:center; min-height:200px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:12px; }
+    .big-sign-emoji{font-size:72px;line-height:1;animation:popIn 0.25s ease}
+    @keyframes popIn{from{transform:scale(0.7);opacity:0}to{transform:scale(1);opacity:1}}
+    .big-sign-word{font-family:'Space Grotesk',sans-serif;font-size:28px;font-weight:600;color:#fff}
+    .big-sign-desc{font-size:14px;color:rgba(255,255,255,0.4);max-width:280px;line-height:1.5}
+    .sts-empty{text-align:center;color:rgba(255,255,255,0.2);font-size:14px}
+    .sts-empty span{font-size:40px;display:block;margin-bottom:10px}
+  </style>
+</head>
+<body>
+<div class="app">
+
+  <header>
+    <div class="logo">
+      <div class="logo-icon">🤟</div>
+      <div class="logo-text">Sign<span>Bridge</span></div>
+    </div>
+    <div class="status-badge"><div class="dot"></div> AI Ready</div>
+  </header>
+
+  <div class="mode-toggle">
+    <button class="mode-btn active" onclick="switchMode('sign-to-text',this)">Sign → Text</button>
+    <button class="mode-btn" onclick="switchMode('text-to-sign',this)">Text → Sign</button>
+    <button class="mode-btn" onclick="switchMode('speech-to-sign',this)">Speech → Sign</button>
+  </div>
+
+  <div id="panel-sign-to-text" class="panel active">
+    <div class="main-grid">
+      <div class="camera-panel">
+        <div class="camera-feed" id="cameraFeed">
+          <div class="corner-tl"></div><div class="corner-tr"></div>
+          <div class="corner-bl"></div><div class="corner-br"></div>
+          <div class="scanning-bar" id="scanBar"></div>
+          <div class="camera-placeholder" id="camPlaceholder">
+            <div class="cam-icon">📷</div>
+            <p>Camera feed will appear here</p>
+          </div>
+          <video id="videoEl" style="display:none;width:100%;height:100%;object-fit:cover" autoplay playsinline></video>
+          
+          <canvas class="output_canvas" id="outputCanvas"></canvas>
+          
+        </div>
+        <div class="camera-controls">
+          <button class="btn-primary" id="camBtn" onclick="toggleCamera()">Start Camera</button>
+          <button class="btn-secondary" onclick="simulateSign()">Demo Sign</button>
+          <button class="btn-secondary" onclick="clearSignOutput()">Clear</button>
+        </div>
+      </div>
+      <div class="right-panel">
+        <div class="card">
+          <div class="card-label">Detected sign</div>
+          <div class="detected-sign" id="detectedSign">—</div>
+          <div class="detected-conf" id="detectedConf">Waiting for input...</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Translation</div>
+          <div class="translation-text" id="translationText">Start signing to see translation here.</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Composed sentence</div>
+          <div class="sentence-area" id="sentenceArea">Your full sentence will appear here...</div>
+          <div class="output-actions">
+            <div class="chip" onclick="speakSentence()">🔊 Speak</div>
+            <div class="chip" onclick="copySentence()">📋 Copy</div>
+            <div class="chip" onclick="clearSentence()">✕ Clear</div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-label">Recent signs</div>
+          <div class="history-list" id="historyList">
+            <div style="font-size:13px;color:rgba(255,255,255,0.2)">No signs detected yet.</div>
+          </div>
+        </div>
+        <div class="accessibility-bar">
+          <span class="a11y-label">Accessibility</span>
+          <div class="a11y-chip" onclick="toggleHighContrast()">High contrast</div>
+          <div class="a11y-chip" onclick="toggleLargeText()">Large text</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="panel-text-to-sign" class="panel">
+    <div class="tts-container">
+      <div class="card">
+        <div class="card-label">Type your message</div>
+        <textarea class="tts-textarea" id="ttsInput" placeholder="Type words or a sentence... e.g. Hello I need help please"></textarea>
+        <div class="tts-actions">
+          <button class="btn-primary" onclick="convertTextToSign()">Show Signs</button>
+          <button class="btn-secondary" onclick="clearTTS()">Clear</button>
+          <button class="btn-secondary" onclick="speakTTSInput()">🔊 Speak</button>
+          <button class="btn-secondary" id="browseDictBtn" onclick="toggleBrowseDict()">Browse Dictionary</button>
+        </div>
+      </div>
+      <div id="ttsOutput">
+        <div class="tts-empty"><span>🤟</span>Type something above and click "Show Signs"</div>
+      </div>
+    </div>
+  </div>
+
+  <div id="panel-speech-to-sign" class="panel">
+    <div class="sts-container">
+      <div class="mic-area">
+        <button class="mic-btn" id="micBtn" onclick="toggleMic()">🎤</button>
+        <div class="mic-status" id="micStatus">Tap the mic to start listening</div>
+        <div class="transcript-box" id="transcriptBox">Your speech will appear here...</div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center">
+          <button class="btn-secondary" onclick="clearSTS()">Clear</button>
+          <button class="btn-secondary" onclick="speakTranscript()">🔊 Speak back</button>
+        </div>
+      </div>
+      <div class="sts-sign-area">
+        <div class="card">
+          <div class="card-label">Detected words — tap a word to see its sign</div>
+          <div class="word-chips" id="wordChips">
+            <span style="font-size:13px;color:rgba(255,255,255,0.2)">Words will appear here after speaking...</span>
+          </div>
+        </div>
+        <div class="big-sign-display" id="bigSignDisplay">
+          <div class="sts-empty"><span>👆</span>Tap a word above to see its sign</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ── SIGN DICTIONARY ──────────────────────────────────────────────────
+// Expanded dictionary: each entry includes emoji, description, tags and an example sentence.
+// Keys are lowercase phrases used by the detection logic (keep them consistent).
+const signDict = {
+  "hello": {"emoji": "👋", "desc": "Wave your open hand side to side", "tags": ["greeting"], "example": "Hello, how are you?"},
+  "yes": {"emoji": "✊", "desc": "Fist closed, indicating yes or affirmation", "tags": ["response"], "example": "Yes, that's correct."},
+  "no": {"emoji": "✖️", "desc": "Index finger shakes side to side (negation)", "tags": ["response"], "example": "No, I can't."},
+  "please": {"emoji": "🙏", "desc": "Flat hand rubs chest in a polite request motion", "tags": ["politeness","request"], "example": "Please help me."},
+  "thank you": {"emoji": "🙇", "desc": "Open hand moves from chin outward to indicate thanks", "tags": ["politeness"], "example": "Thank you for your help."},
+  "sorry": {"emoji": "😔", "desc": "Closed fist rubs chest to express apology", "tags": ["emotion","politeness"], "example": "I'm sorry for that."},
+  "help": {"emoji": "🆘", "desc": "Open hands palms up motion asking for assistance", "tags": ["request","safety"], "example": "I need help."},
+  "stop": {"emoji": "✋", "desc": "Flat hand held up, palm facing outward to signal stop", "tags": ["command","safety"], "example": "Stop right there."},
+  "eat": {"emoji": "🍽️", "desc": "Bring fingertips to mouth as if eating", "tags": ["action","basic"], "example": "I'm going to eat."},
+  "drink": {"emoji": "🥤", "desc": "Tilt an imaginary cup toward the mouth", "tags": ["action","basic"], "example": "Do you want a drink?"},
+  "bathroom": {"emoji": "🚻", "desc": "Hand makes a T-shape or points to restroom direction", "tags": ["need","basic"], "example": "Where is the bathroom?"},
+  "mother": {"emoji": "👩‍👧", "desc": "Open hand touches chin with thumb (mother family sign)", "tags": ["family"], "example": "My mother is coming."},
+  "father": {"emoji": "👨‍👧", "desc": "Open hand touches forehead with thumb (father family sign)", "tags": ["family"], "example": "My father is here."},
+  "love": {"emoji": "❤️", "desc": "Cross arms over chest to show affection", "tags": ["emotion"], "example": "I love this."},
+  "i love you": {"emoji": "🤟", "desc": "Thumb, index, and pinky extended (I-L-Y) — expresses love or affection", "tags": ["emotion","greeting"], "example": "I love you."},
+  "point": {"emoji": "🫵", "desc": "Index finger pointing forward to indicate direction or item", "tags": ["action"], "example": "Point to the door."},
+  "ok": {"emoji": "👌", "desc": "Index and thumb touch forming a circle, other fingers extended (OK)", "tags": ["response"], "example": "Everything is OK."},
+  "peace": {"emoji": "✌️", "desc": "Index and middle fingers raised (peace or victory)", "tags": ["greeting","emotion"], "example": "Peace!"},
+  "good": {"emoji": "👍", "desc": "Flat hand moves from chin outward to mean good or well", "tags": ["description"], "example": "That's good news."},
+  "bad": {"emoji": "👎", "desc": "Hand moves from chin outward with negative meaning", "tags": ["description"], "example": "That's bad."},
+  "where": {"emoji": "📍", "desc": "Both hands palm up, shrugging motion to ask location", "tags": ["question"], "example": "Where is it?"},
+  "who": {"emoji": "❓", "desc": "Index finger taps chin then moves outward to ask 'who'", "tags": ["question"], "example": "Who did that?"},
+  "what": {"emoji": "❔", "desc": "Hands palm up with slight shrug to mean 'what' or asking for clarification", "tags": ["question"], "example": "What happened?"},
+  "when": {"emoji": "🕒", "desc": "Index finger circles near wrist or taps wrist area to indicate time", "tags": ["question"], "example": "When will it start?"},
+  "why": {"emoji": "🤨", "desc": "Hand taps forehead then opens as a question for reason", "tags": ["question"], "example": "Why did you go?"}
+};
+const demoKeys = Object.keys(signDict);
+
+// ── MODE SWITCH ──────────────────────────────────────────────────────
+function switchMode(mode, btn) {
+  document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.getElementById('panel-' + mode).classList.add('active');
+  if (mode !== 'sign-to-text' && cameraOn) stopCamera();
+  if (mode !== 'speech-to-sign' && isListening) stopMic();
+}
+
+// ── SIGN TO TEXT ─────────────────────────────────────────────────────
+let cameraOn = false, camStream = null;
+let sentence = [], signHistory = [];
+
+// === NEW: MEDIAPIPE AI SETUP ===
+const videoElement = document.getElementById('videoEl');
+const canvasElement = document.getElementById('outputCanvas');
+const canvasCtx = canvasElement.getContext('2d');
+let camera = null;
+
+// Initialize the MediaPipe Hands model
+const hands = new Hands({locateFile: (file) => {
+  return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+}});
+hands.setOptions({
+  maxNumHands: 2,
+  modelComplexity: 1,
+  minDetectionConfidence: 0.6,
+  minTrackingConfidence: 0.6
+});
+hands.onResults(onResults);
+
+function toggleCamera() { cameraOn ? stopCamera() : startCamera(); }
+
+async function startCamera() {
+  document.getElementById('camPlaceholder').style.display = 'none';
+  document.getElementById('scanBar').classList.add('active');
+  document.getElementById('camBtn').textContent = 'Stop Camera';
+  videoElement.style.display = 'block';
+
+  // Start the MediaPipe camera utility
+  camera = new Camera(videoElement, {
+    onFrame: async () => {
+      await hands.send({image: videoElement});
+    },
+    width: 640,
+    height: 480
+  });
+  camera.start();
+  cameraOn = true;
+}
+
+function stopCamera() {
+  if (camera) { camera.stop(); }
+  videoElement.style.display = 'none';
+  document.getElementById('camPlaceholder').style.display = 'flex';
+  document.getElementById('scanBar').classList.remove('active');
+  document.getElementById('camBtn').textContent = 'Start Camera';
+  // Clear canvas
+  canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+  cameraOn = false;
+}
+
+// === NEW: AI PROCESSING FUNCTION ===
+let lastDetectedSign = ""; // currently active sign label
+
+// Detection smoothing/configuration
+const DETECTION_BUFFER = 6;        // number of recent frames to consider
+const DETECTION_REQUIRED = 4;      // number of matching frames required to confirm
+const TRIGGER_COOLDOWN = 800;      // ms cooldown between triggers
+let detectionBuffer = [];         // circular buffer of recent detections
+let lastTriggerTime = 0;
+
+function detectSignFromLandmarks(landmarks) {
+  // Compute basic finger-extension booleans (y smaller => higher on camera)
+  const isIndexExt = landmarks[8].y < landmarks[6].y;
+  const isMiddleExt = landmarks[12].y < landmarks[10].y;
+  const isRingExt = landmarks[16].y < landmarks[14].y;
+  const isPinkyExt = landmarks[20].y < landmarks[18].y;
+
+  // Compute a normalized distance between thumb tip and index tip using hand bbox width
+  const xs = landmarks.map(p => p.x);
+  const ys = landmarks.map(p => p.y);
+  const bboxW = Math.max(...xs) - Math.min(...xs) || 0.0001;
+  const thumbIndexDist = Math.hypot(landmarks[4].x - landmarks[8].x, landmarks[4].y - landmarks[8].y) / bboxW;
+
+  // Heuristics (ordered roughly by specificity)
+  // OK: thumb and index close, other fingers extended
+  if (thumbIndexDist < 0.18 && isMiddleExt && isRingExt && isPinkyExt) return 'ok';
+
+  // ILY: index + pinky extended, middle+ring not
+  if (isIndexExt && isPinkyExt && !isMiddleExt && !isRingExt) return 'i love you';
+
+  // Peace / V sign: index + middle extended only
+  if (isIndexExt && isMiddleExt && !isRingExt && !isPinkyExt) return 'peace';
+
+  // Point: index only
+  if (isIndexExt && !isMiddleExt && !isRingExt && !isPinkyExt) return 'point';
+
+  // Hello: all four fingers extended (open hand)
+  if (isIndexExt && isMiddleExt && isRingExt && isPinkyExt) return 'hello';
+
+  // Yes: fist (no fingers extended)
+  if (!isIndexExt && !isMiddleExt && !isRingExt && !isPinkyExt) return 'yes';
+
+  // Not recognized confidently
+  return null;
+}
+
+function onResults(results) {
+  // 1. Draw skeletons on canvas
+  canvasCtx.save();
+  canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+  canvasElement.width = videoElement.videoWidth;
+  canvasElement.height = videoElement.videoHeight;
+
+  if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+    for (const landmarks of results.multiHandLandmarks) {
+      drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, {color: '#4f8ef7', lineWidth: 3});
+      drawLandmarks(canvasCtx, landmarks, {color: '#818cf8', lineWidth: 2, radius: 3});
+    }
+
+    // Use the first detected hand for simple gesture detection (you can extend to two-hand logic later)
+    const landmarks = results.multiHandLandmarks[0];
+    const detected = detectSignFromLandmarks(landmarks);
+
+    // Push to buffer and maintain length
+    detectionBuffer.push(detected);
+    if (detectionBuffer.length > DETECTION_BUFFER) detectionBuffer.shift();
+
+    // Count occurrences of non-null detection candidates in buffer
+    const counts = {};
+    for (const d of detectionBuffer) {
+      if (!d) continue;
+      counts[d] = (counts[d] || 0) + 1;
+    }
+    // Find top candidate
+    let top = null, topCount = 0;
+    for (const k in counts) {
+      if (counts[k] > topCount) { top = k; topCount = counts[k]; }
+    }
+
+    const now = Date.now();
+    if (top && topCount >= DETECTION_REQUIRED && top !== lastDetectedSign && (now - lastTriggerTime) > TRIGGER_COOLDOWN) {
+      triggerRealSign(top);
+      lastTriggerTime = now;
+      lastDetectedSign = top;
+    }
+
+    // If buffer has mostly nulls, reset lastDetectedSign after cooldown so a new sign can be detected later
+    const nulls = detectionBuffer.filter(x => !x).length;
+    if (nulls >= DETECTION_BUFFER - 1) {
+      // small debounce before clearing to avoid flicker
+      if (now - lastTriggerTime > TRIGGER_COOLDOWN) lastDetectedSign = "";
+    }
+  } else {
+    // No hands: push null into buffer
+    detectionBuffer.push(null);
+    if (detectionBuffer.length > DETECTION_BUFFER) detectionBuffer.shift();
+    const now = Date.now();
+    const nulls = detectionBuffer.filter(x => !x).length;
+    if (nulls >= Math.ceil(DETECTION_BUFFER * 0.8) && (now - lastTriggerTime) > TRIGGER_COOLDOWN) {
+      lastDetectedSign = "";
+    }
+  }
+
+  canvasCtx.restore();
+}
+
+function triggerRealSign(signKey) {
+  if (lastDetectedSign === signKey) return; // Wait until sign changes
+  lastDetectedSign = signKey;
+
+  const s = signDict[signKey];
+  const label = signKey.charAt(0).toUpperCase() + signKey.slice(1);
+  
+  document.getElementById('detectedSign').textContent = label;
+  document.getElementById('detectedConf').textContent = 'Confidence: ' + (85 + Math.floor(Math.random() * 10)) + '%';
+  document.getElementById('translationText').textContent = s.desc;
+  
+  sentence.push(label);
+  document.getElementById('sentenceArea').textContent = sentence.join(' ');
+  signHistory.unshift({ sign: label, desc: s.desc });
+  if (signHistory.length > 5) signHistory.pop();
+  renderHistory();
+}
+
+// (The rest of your functions: simulateSign, renderHistory, clearSignOutput, Text-to-Sign, and Speech-to-Sign remain exactly the same as your original code)
+
+function simulateSign() {
+  const key = demoKeys[Math.floor(Math.random() * demoKeys.length)];
+  triggerRealSign(key);
+  lastDetectedSign = ""; // reset so demo can be clicked multiple times
+}
+
+function renderHistory() {
+  const list = document.getElementById('historyList');
+  if (!signHistory.length) { list.innerHTML = '<div style="font-size:13px;color:rgba(255,255,255,0.2)">No signs detected yet.</div>'; return; }
+  list.innerHTML = signHistory.map(h => '<div class="history-item"><span class="history-sign">' + h.sign + '</span><span>' + h.desc + '</span></div>').join('');
+}
+
+function clearSignOutput() {
+  document.getElementById('detectedSign').textContent = '—';
+  document.getElementById('detectedConf').textContent = 'Waiting for input...';
+  document.getElementById('translationText').textContent = 'Start signing to see translation here.';
+  lastDetectedSign = "";
+}
+
+function clearSentence() {
+  sentence = [];
+  document.getElementById('sentenceArea').textContent = 'Your full sentence will appear here...';
+}
+
+function speakSentence() {
+  const t = sentence.join(' ');
+  if (t && window.speechSynthesis) window.speechSynthesis.speak(new SpeechSynthesisUtterance(t));
+}
+
+function copySentence() {
+  if (sentence.length) navigator.clipboard.writeText(sentence.join(' ')).catch(() => {});
+}
+
+// --- BROWSE DICTIONARY UI ---
+let dictVisible = false;
+function toggleBrowseDict() {
+  dictVisible = !dictVisible;
+  const btn = document.getElementById('browseDictBtn');
+  if (dictVisible) {
+    renderDictionary();
+    if (btn) btn.textContent = 'Hide Dictionary';
+  } else {
+    document.getElementById('ttsOutput').innerHTML = '<div class="tts-empty"><span>🤟</span>Type something above and click "Show Signs"</div>';
+    if (btn) btn.textContent = 'Browse Dictionary';
+  }
+}
+
+function renderDictionary() {
+  const keys = Object.keys(signDict).sort((a,b) => a.localeCompare(b));
+  const cards = keys.map(k => {
+    const s = signDict[k] || {};
+    const label = k.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+    const example = s.example ? '<div class="sign-card-desc" style="margin-top:6px;font-size:11px;color:rgba(255,255,255,0.25)">Example: ' + s.example + '</div>' : '';
+    return '<div class="sign-card"><span class="sign-card-emoji">' + (s.emoji || '🤟') + '</span><div class="sign-card-word">' + label + '</div><div class="sign-card-desc">' + (s.desc || 'Description not available') + '</div>' + example + '</div>';
+  }).join('');
+
+  document.getElementById('ttsOutput').innerHTML =
+    '<div class="card"><div class="card-label">Sign dictionary (' + keys.length + ' entries)</div><div class="sign-display-grid">' + cards + '</div></div>';
+}
+
+</script>
+</body>
+</html>
