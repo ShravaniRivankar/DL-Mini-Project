@@ -352,7 +352,28 @@ function detectSignFromLandmarks(landmarks) {
   const bboxW = Math.max(...xs) - Math.min(...xs) || 0.0001;
   const thumbIndexDist = Math.hypot(landmarks[4].x - landmarks[8].x, landmarks[4].y - landmarks[8].y) / bboxW;
 
+  // Additional metrics useful for more gestures
+  const indexThumbDist = Math.hypot(landmarks[8].x - landmarks[4].x, landmarks[8].y - landmarks[4].y) / bboxW;
+  const middleThumbDist = Math.hypot(landmarks[12].x - landmarks[4].x, landmarks[12].y - landmarks[4].y) / bboxW;
+  const fingertipExtCount = [isIndexExt, isMiddleExt, isRingExt, isPinkyExt].filter(Boolean).length;
+  const thumbWristDist = Math.hypot(landmarks[4].x - landmarks[0].x, landmarks[4].y - landmarks[0].y) / bboxW;
+
   // Heuristics (ordered roughly by specificity)
+  // NO: index+middle tapped toward thumb (tips close to thumb)
+  if (isIndexExt && isMiddleExt && indexThumbDist < 0.16 && middleThumbDist < 0.16) return 'no';
+
+  // THUMBS UP / THUMBS DOWN -> map to 'good' / 'bad'
+  // Thumb far from wrist and other fingers mostly not extended. Use vertical relation to wrist to decide up vs down.
+  if (thumbWristDist > 0.85 && fingertipExtCount <= 1) {
+    // landmarks[4].y < landmarks[0].y => thumb is above wrist (thumbs up)
+    if (landmarks[4].y < landmarks[0].y) return 'good';
+    // thumbs down
+    if (landmarks[4].y > landmarks[0].y) return 'bad';
+  }
+
+  // CALL / Y-hand: thumb + pinky extended, others not
+  if (isPinkyExt && !isIndexExt && !isMiddleExt && !isRingExt && thumbWristDist > 0.65) return 'call';
+
   // OK: thumb and index close, other fingers extended
   if (thumbIndexDist < 0.18 && isMiddleExt && isRingExt && isPinkyExt) return 'ok';
 
@@ -375,6 +396,28 @@ function detectSignFromLandmarks(landmarks) {
   return null;
 }
 
+// Detect a few two-hand gestures (expects array of two landmark arrays)
+function detectTwoHandGestures(hands) {
+  if (!hands || hands.length < 2) return null;
+  const a = hands[0], b = hands[1];
+  // compute a simple normalized bbox width average for scale
+  const ax = a.map(p => p.x), bx = b.map(p => p.x);
+  const aw = Math.max(...ax) - Math.min(...ax) || 0.0001;
+  const bw = Math.max(...bx) - Math.min(...bx) || 0.0001;
+  const avgW = (aw + bw) / 2;
+
+  // More: fingertips of index and middle from both hands close together
+  const idxDist = Math.hypot(a[8].x - b[8].x, a[8].y - b[8].y) / avgW;
+  const midDist = Math.hypot(a[12].x - b[12].x, a[12].y - b[12].y) / avgW;
+  if (idxDist < 0.10 && midDist < 0.10) return 'more';
+
+  // Both hands together in prayer (please/thank you) — palms close and fingers touching
+  const palmDist = Math.hypot(a[0].x - b[0].x, a[0].y - b[0].y) / avgW;
+  if (palmDist < 0.12) return 'please';
+
+  return null;
+}
+
 function onResults(results) {
   // 1. Draw skeletons on canvas
   canvasCtx.save();
@@ -388,9 +431,16 @@ function onResults(results) {
       drawLandmarks(canvasCtx, landmarks, {color: '#818cf8', lineWidth: 2, radius: 3});
     }
 
-    // Use the first detected hand for simple gesture detection (you can extend to two-hand logic later)
-    const landmarks = results.multiHandLandmarks[0];
-    const detected = detectSignFromLandmarks(landmarks);
+    // First check for two-hand gestures (more robust for certain signs)
+    let detected = null;
+    if (results.multiHandLandmarks.length >= 2) {
+      detected = detectTwoHandGestures(results.multiHandLandmarks);
+    }
+    // If no two-hand gesture, fall back to single-hand heuristics
+    if (!detected) {
+      const landmarks = results.multiHandLandmarks[0];
+      detected = detectSignFromLandmarks(landmarks);
+    }
 
     // Push to buffer and maintain length
     detectionBuffer.push(detected);
@@ -488,6 +538,53 @@ function copySentence() {
   if (sentence.length) navigator.clipboard.writeText(sentence.join(' ')).catch(() => {});
 }
 
+// ── TEXT TO SIGN ─────────────────────────────────────────────────────
+function convertTextToSign() {
+  const raw = document.getElementById('ttsInput').value.trim();
+  if (!raw) return;
+  const lower = raw.toLowerCase().replace(/[^a-z\s]/g, '');
+  const words = lower.split(/\s+/).filter(Boolean);
+  if (!words.length) return;
+
+  let results = [], i = 0;
+  while (i < words.length) {
+    if (i + 1 < words.length && signDict[words[i] + ' ' + words[i+1]]) {
+      const phrase = words[i] + ' ' + words[i+1];
+      results.push({ word: phrase, sign: signDict[phrase] });
+      i += 2;
+    } else {
+      results.push({ word: words[i], sign: signDict[words[i]] || null });
+      i++;
+    }
+  }
+
+  const cards = results.map(r => {
+    const label = r.word.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+    if (r.sign) {
+      return '<div class="sign-card"><span class="sign-card-emoji">' + r.sign.emoji + '</span><div class="sign-card-word">' + label + '</div><div class="sign-card-desc">' + r.sign.desc + '</div></div>';
+    } else {
+      return '<div class="sign-card" style="opacity:0.45"><span class="sign-card-emoji">🔤</span><div class="sign-card-word">' + label + '</div><div class="sign-card-desc">Fingerspell each letter</div></div>';
+    }
+  }).join('');
+
+  document.getElementById('ttsOutput').innerHTML =
+    '<div class="card"><div class="card-label">Signs for your message (' + results.length + ' word' + (results.length !== 1 ? 's' : '') + ')</div><div class="sign-display-grid">' + cards + '</div></div>';
+}
+
+function clearTTS() {
+  document.getElementById('ttsInput').value = '';
+  document.getElementById('ttsOutput').innerHTML = '<div class="tts-empty"><span>🤟</span>Type something above and click "Show Signs"</div>';
+}
+
+function speakTTSInput() {
+  const t = document.getElementById('ttsInput').value.trim();
+  if (t && window.speechSynthesis) window.speechSynthesis.speak(new SpeechSynthesisUtterance(t));
+}
+
+document.getElementById('ttsInput').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); convertTextToSign(); }
+});
+
 // --- BROWSE DICTIONARY UI ---
 let dictVisible = false;
 function toggleBrowseDict() {
@@ -513,6 +610,114 @@ function renderDictionary() {
 
   document.getElementById('ttsOutput').innerHTML =
     '<div class="card"><div class="card-label">Sign dictionary (' + keys.length + ' entries)</div><div class="sign-display-grid">' + cards + '</div></div>';
+}
+
+// ── SPEECH TO SIGN ────────────────────────────────────────────────────
+let recognition = null, isListening = false;
+let fullTranscript = '';
+
+function initRecognition() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) return null;
+  const r = new SR();
+  r.continuous = true;
+  r.interimResults = true;
+  r.lang = 'en-US';
+
+  r.onstart = () => {
+    isListening = true;
+    const btn = document.getElementById('micBtn'); if (btn) btn.classList.add('listening');
+    if (btn) btn.textContent = '⏹️';
+    document.getElementById('micStatus').textContent = 'Listening... speak now';
+    document.getElementById('micStatus').className = 'mic-status active';
+  };
+
+  r.onend = () => {
+    isListening = false;
+    const btn = document.getElementById('micBtn'); if (btn) btn.classList.remove('listening');
+    if (btn) btn.textContent = '🎤';
+    document.getElementById('micStatus').textContent = 'Tap the mic to start listening';
+    document.getElementById('micStatus').className = 'mic-status';
+  };
+
+  r.onerror = (e) => {
+    isListening = false;
+    const btn = document.getElementById('micBtn'); if (btn) btn.classList.remove('listening');
+    if (btn) btn.textContent = '🎤';
+    let msg = 'Error: ' + e.error;
+    if (e.error === 'not-allowed') msg = 'Microphone access denied — click Allow in browser.';
+    if (e.error === 'no-speech') msg = 'No speech detected. Try speaking louder.';
+    document.getElementById('micStatus').textContent = msg;
+    document.getElementById('micStatus').className = 'mic-status error';
+  };
+
+  r.onresult = (event) => {
+    let interim = '', finalChunk = '';
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      if (event.results[i].isFinal) finalChunk += event.results[i][0].transcript + ' ';
+      else interim += event.results[i][0].transcript;
+    }
+    if (finalChunk) fullTranscript += finalChunk;
+    const display = (fullTranscript + interim).trim();
+    document.getElementById('transcriptBox').textContent = display || 'Listening...';
+    buildWordChips(display);
+  };
+
+  return r;
+}
+
+function buildWordChips(text) {
+  const raw = text.toLowerCase().replace(/[^a-z\s]/g, '').split(/\s+/).filter(Boolean);
+  const unique = [...new Set(raw)];
+  const container = document.getElementById('wordChips');
+  if (!unique.length) {
+    container.innerHTML = '<span style="font-size:13px;color:rgba(255,255,255,0.2)">Words will appear here after speaking...</span>';
+    return;
+  }
+  container.innerHTML = unique.map(w =>
+    '<div class="word-chip" onclick="showSign(\'' + w.replace(/'/g, "\\'") + '\', this)">' + w.charAt(0).toUpperCase() + w.slice(1) + '</div>'
+  ).join('');
+}
+
+function showSign(word, el) {
+  document.querySelectorAll('.word-chip').forEach(c => c.classList.remove('active'));
+  if (el) el.classList.add('active');
+  const s = signDict[word];
+  const label = word.charAt(0).toUpperCase() + word.slice(1);
+  const display = document.getElementById('bigSignDisplay');
+  if (s) {
+    display.innerHTML = '<div class="big-sign-emoji" id="bse">' + s.emoji + '</div><div class="big-sign-word">' + label + '</div><div class="big-sign-desc">' + s.desc + '</div>';
+    const el2 = document.getElementById('bse');
+    if (el2) { el2.style.animation = 'none'; el2.offsetHeight; el2.style.animation = 'popIn 0.25s ease'; }
+  } else {
+    display.innerHTML = '<div class="big-sign-emoji">🔤</div><div class="big-sign-word">' + label + '</div><div class="big-sign-desc">Fingerspell each letter of this word</div>';
+  }
+}
+
+function toggleMic() {
+  if (!recognition) {
+    recognition = initRecognition();
+    if (!recognition) {
+      document.getElementById('micStatus').textContent = 'Speech recognition not supported. Please use Chrome or Edge.';
+      document.getElementById('micStatus').className = 'mic-status error';
+      return;
+    }
+  }
+  if (isListening) stopMic(); else recognition.start();
+}
+
+function stopMic() { if (recognition && isListening) recognition.stop(); }
+
+function clearSTS() {
+  fullTranscript = '';
+  document.getElementById('transcriptBox').textContent = 'Your speech will appear here...';
+  document.getElementById('wordChips').innerHTML = '<span style="font-size:13px;color:rgba(255,255,255,0.2)">Words will appear here after speaking...</span>';
+  document.getElementById('bigSignDisplay').innerHTML = '<div class="sts-empty"><span>👆</span>Tap a word above to see its sign</div>';
+}
+
+function speakTranscript() {
+  const t = fullTranscript.trim();
+  if (t && window.speechSynthesis) window.speechSynthesis.speak(new SpeechSynthesisUtterance(t));
 }
 
 </script>
